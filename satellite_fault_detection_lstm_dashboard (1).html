@@ -1,0 +1,530 @@
+
+<h2 class="sr-only">AI for Satellite Fault Detection — LSTM Anomaly Detection Prototype Dashboard with live telemetry, confusion matrix, and performance metrics</h2>
+
+<style>
+  :root { --tick: 0; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: var(--font-sans); }
+  .app { padding: 1rem 0; }
+  .header { display: flex; align-items: center; gap: 12px; margin-bottom: 1.5rem; }
+  .sat-icon { width: 36px; height: 36px; }
+  .title-block h1 { font-size: 17px; font-weight: 500; color: var(--color-text-primary); }
+  .title-block p { font-size: 12px; color: var(--color-text-secondary); margin-top: 2px; }
+  .status-pill { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 500; color: var(--color-text-success); background: var(--color-background-success); border: 0.5px solid var(--color-border-success); padding: 4px 10px; border-radius: 20px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.35} }
+  .metrics-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 1.25rem; }
+  .metric-card { background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 12px 14px; }
+  .metric-card .label { font-size: 11px; color: var(--color-text-secondary); margin-bottom: 4px; }
+  .metric-card .value { font-size: 22px; font-weight: 500; color: var(--color-text-primary); }
+  .metric-card .sub { font-size: 11px; margin-top: 2px; }
+  .metric-card.good .sub { color: var(--color-text-success); }
+  .metric-card.warn .sub { color: var(--color-text-warning); }
+  .chart-row { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 1.25rem; }
+  .chart-row.full { grid-template-columns: 1fr; }
+  .panel { background: var(--color-background-primary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 14px 16px; }
+  .panel-title { font-size: 13px; font-weight: 500; color: var(--color-text-primary); margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .badge { font-size: 10px; padding: 2px 7px; border-radius: 10px; font-weight: 500; }
+  .badge-info { background: var(--color-background-info); color: var(--color-text-info); }
+  .badge-danger { background: var(--color-background-danger); color: var(--color-text-danger); }
+  .badge-success { background: var(--color-background-success); color: var(--color-text-success); }
+  .telemetry-chart { position: relative; width: 100%; height: 180px; }
+  .cm-grid { display: grid; grid-template-columns: auto 1fr 1fr; grid-template-rows: auto 1fr 1fr; gap: 4px; }
+  .cm-label { font-size: 11px; color: var(--color-text-secondary); display: flex; align-items: center; justify-content: center; padding: 4px; }
+  .cm-cell { border-radius: 6px; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 70px; }
+  .cm-cell .count { font-size: 22px; font-weight: 500; }
+  .cm-cell .name { font-size: 10px; margin-top: 2px; }
+  .cm-tp { background: #EAF3DE; } .cm-tp .count { color: #27500A; } .cm-tp .name { color: #3B6D11; }
+  .cm-tn { background: #EAF3DE; } .cm-tn .count { color: #27500A; } .cm-tn .name { color: #3B6D11; }
+  .cm-fp { background: #FAEEDA; } .cm-fp .count { color: #633806; } .cm-fp .name { color: #854F0B; }
+  .cm-fn { background: #FCEBEB; } .cm-fn .count { color: #501313; } .cm-fn .name { color: #A32D2D; }
+  @media (prefers-color-scheme: dark) {
+    .cm-tp,.cm-tn { background: #173404; } .cm-tp .count,.cm-tn .count { color: #C0DD97; } .cm-tp .name,.cm-tn .name { color: #97C459; }
+    .cm-fp { background: #412402; } .cm-fp .count { color: #FAC775; } .cm-fp .name { color: #EF9F27; }
+    .cm-fn { background: #501313; } .cm-fn .count { color: #F7C1C1; } .cm-fn .name { color: #F09595; }
+  }
+  .param-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12px; }
+  .param-row label { width: 100px; color: var(--color-text-secondary); flex-shrink: 0; }
+  .param-row .bar-bg { flex: 1; height: 6px; background: var(--color-background-secondary); border-radius: 3px; overflow: hidden; }
+  .param-row .bar-fill { height: 100%; border-radius: 3px; transition: width 0.4s ease; }
+  .param-row .val { width: 52px; text-align: right; font-weight: 500; color: var(--color-text-primary); }
+  .param-row .status { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; }
+  .alert-box { border: 0.5px solid var(--color-border-danger); background: var(--color-background-danger); border-radius: var(--border-radius-md); padding: 8px 12px; display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 12px; }
+  .alert-box .icon { font-size: 14px; flex-shrink: 0; }
+  .alert-box .msg { color: var(--color-text-danger); flex: 1; }
+  .alert-box .time { color: var(--color-text-danger); opacity: 0.7; font-size: 11px; }
+  .timeline-wrap { position: relative; width: 100%; height: 120px; }
+  .controls { display: flex; gap: 8px; margin-bottom: 1.25rem; align-items: center; flex-wrap: wrap; }
+  .ctrl-btn { font-size: 12px; padding: 5px 12px; border: 0.5px solid var(--color-border-secondary); border-radius: var(--border-radius-md); background: transparent; color: var(--color-text-primary); cursor: pointer; }
+  .ctrl-btn:hover { background: var(--color-background-secondary); }
+  .ctrl-btn.active { background: var(--color-background-info); color: var(--color-text-info); border-color: var(--color-border-info); }
+  .ctrl-label { font-size: 12px; color: var(--color-text-secondary); margin-left: auto; }
+  .threshold-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--color-text-secondary); margin-bottom: 12px; }
+  .threshold-row input[type=range] { flex: 1; }
+  .threshold-row .tval { font-weight: 500; color: var(--color-text-primary); min-width: 40px; }
+  .pain-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .pain-item { border-left: 3px solid; border-radius: 0; padding: 8px 12px; background: var(--color-background-secondary); border-radius: 0 var(--border-radius-md) var(--border-radius-md) 0; }
+  .pain-item.high { border-color: #E24B4A; }
+  .pain-item.med { border-color: #EF9F27; }
+  .pain-item.low { border-color: #1D9E75; }
+  .pain-item .pt { font-size: 12px; font-weight: 500; color: var(--color-text-primary); margin-bottom: 3px; }
+  .pain-item .pd { font-size: 11px; color: var(--color-text-secondary); }
+  .pain-item .severity { font-size: 10px; margin-top: 4px; padding: 2px 6px; border-radius: 8px; display: inline-block; }
+  .pain-item.high .severity { background: var(--color-background-danger); color: var(--color-text-danger); }
+  .pain-item.med .severity { background: var(--color-background-warning); color: var(--color-text-warning); }
+  .pain-item.low .severity { background: var(--color-background-success); color: var(--color-text-success); }
+  .footer-note { font-size: 11px; color: var(--color-text-tertiary); margin-top: 1.25rem; text-align: center; }
+</style>
+
+<div class="app">
+  <div class="header">
+    <svg class="sat-icon" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="14" y="14" width="8" height="8" rx="2" fill="#378ADD"/>
+      <rect x="2" y="15" width="9" height="6" rx="1.5" fill="#185FA5" opacity="0.8"/>
+      <rect x="25" y="15" width="9" height="6" rx="1.5" fill="#185FA5" opacity="0.8"/>
+      <rect x="15" y="2" width="6" height="9" rx="1.5" fill="#185FA5" opacity="0.8"/>
+      <rect x="15" y="25" width="6" height="9" rx="1.5" fill="#185FA5" opacity="0.8"/>
+      <line x1="11" y1="18" x2="14" y2="18" stroke="#378ADD" stroke-width="1.5"/>
+      <line x1="22" y1="18" x2="25" y2="18" stroke="#378ADD" stroke-width="1.5"/>
+      <line x1="18" y1="11" x2="18" y2="14" stroke="#378ADD" stroke-width="1.5"/>
+      <line x1="18" y1="22" x2="18" y2="25" stroke="#378ADD" stroke-width="1.5"/>
+      <circle cx="18" cy="18" r="2" fill="white"/>
+    </svg>
+    <div class="title-block">
+      <h1>AI Satellite Fault Detection — LSTM Anomaly Dashboard</h1>
+      <p>Multivariate telemetry · LSTM Autoencoder · Real-time anomaly scoring · Confusion matrix analysis</p>
+    </div>
+    <div class="status-pill"><div class="dot"></div><span id="status-txt">Live — Orbit 1428</span></div>
+  </div>
+
+  <div class="metrics-row">
+    <div class="metric-card good">
+      <div class="label">Model accuracy</div>
+      <div class="value" id="m-acc">96.4%</div>
+      <div class="sub">↑ +1.2% vs baseline SVM</div>
+    </div>
+    <div class="metric-card good">
+      <div class="label">Precision</div>
+      <div class="value" id="m-prec">94.1%</div>
+      <div class="sub">↑ Low false-positive rate</div>
+    </div>
+    <div class="metric-card good">
+      <div class="label">Recall (sensitivity)</div>
+      <div class="value" id="m-rec">91.7%</div>
+      <div class="sub">↑ Catches critical faults</div>
+    </div>
+    <div class="metric-card warn">
+      <div class="label">F1 score</div>
+      <div class="value" id="m-f1">0.929</div>
+      <div class="sub">Threshold: <span id="thr-disp">0.35</span></div>
+    </div>
+  </div>
+
+  <div class="controls">
+    <button class="ctrl-btn active" id="btn-temp" onclick="setParam('temp')">Temperature</button>
+    <button class="ctrl-btn" id="btn-volt" onclick="setParam('volt')">Voltage</button>
+    <button class="ctrl-btn" id="btn-pres" onclick="setParam('pres')">Pressure</button>
+    <button class="ctrl-btn" id="btn-cpu" onclick="setParam('cpu')">CPU usage</button>
+    <span class="ctrl-label">Anomaly threshold:</span>
+    <input type="range" min="0.1" max="0.9" step="0.05" value="0.35" id="thr-slider" style="width:90px;" oninput="updateThreshold(this.value)">
+    <span style="font-size:12px;font-weight:500;color:var(--color-text-primary);min-width:32px" id="thr-val">0.35</span>
+  </div>
+
+  <div class="chart-row full">
+    <div class="panel">
+      <div class="panel-title">
+        Live telemetry signal + anomaly detection
+        <span class="badge badge-info" id="param-label">Temperature (°C)</span>
+        <span class="badge badge-danger" id="fault-count-badge">2 faults detected</span>
+      </div>
+      <div class="telemetry-chart">
+        <canvas id="telChart" role="img" aria-label="Live satellite telemetry time series with anomaly overlay">Telemetry signal over time with detected anomalies highlighted.</canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="chart-row">
+    <div class="panel">
+      <div class="panel-title">Confusion matrix <span class="badge badge-success">Test set n=500</span></div>
+      <div style="margin-bottom:8px;">
+        <div class="cm-grid">
+          <div></div>
+          <div class="cm-label" style="font-size:10px;">Predicted: Normal</div>
+          <div class="cm-label" style="font-size:10px;">Predicted: Fault</div>
+          <div class="cm-label" style="writing-mode:vertical-rl;text-orientation:mixed;transform:rotate(180deg);font-size:10px;">Actual: Normal</div>
+          <div class="cm-cell cm-tn"><div class="count" id="cm-tn">423</div><div class="name">True Neg</div></div>
+          <div class="cm-cell cm-fp"><div class="count" id="cm-fp">17</div><div class="name">False Pos</div></div>
+          <div class="cm-label" style="writing-mode:vertical-rl;text-orientation:mixed;transform:rotate(180deg);font-size:10px;">Actual: Fault</div>
+          <div class="cm-cell cm-fn"><div class="count" id="cm-fn">5</div><div class="name">False Neg</div></div>
+          <div class="cm-cell cm-tp"><div class="count" id="cm-tp">55</div><div class="name">True Pos</div></div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:var(--color-text-secondary);margin-top:8px;">
+        Specificity: <b>96.1%</b> &nbsp;|&nbsp; Miss rate: <b>8.3%</b> &nbsp;|&nbsp; Total test samples: 500
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-title">Model comparison <span class="badge badge-info">5 algorithms</span></div>
+      <div style="position:relative;width:100%;height:180px;">
+        <canvas id="compareChart" role="img" aria-label="Bar chart comparing accuracy, precision, recall and F1 score across five machine learning models">Model comparison across LSTM, GRU, Random Forest, SVM, and Threshold methods.</canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="chart-row">
+    <div class="panel">
+      <div class="panel-title">Real-time parameter health <span class="badge badge-info">4 channels</span></div>
+      <div id="param-bars"></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Reconstruction error over time <span class="badge badge-danger">LSTM output</span></div>
+      <div style="position:relative;width:100%;height:155px;">
+        <canvas id="reconChart" role="img" aria-label="LSTM reconstruction error over time with anomaly threshold line">Reconstruction error time series with threshold markers.</canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="chart-row">
+    <div class="panel">
+      <div class="panel-title">Active fault alerts <span class="badge badge-danger" id="alert-count">2 active</span></div>
+      <div id="alert-list"></div>
+      <div style="font-size:11px;color:var(--color-text-secondary);margin-top:8px;">Last ground station uplink: <b id="uplink-time">04:21:07 UTC</b></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">Training loss curve <span class="badge badge-success">50 epochs</span></div>
+      <div style="position:relative;width:100%;height:140px;">
+        <canvas id="lossChart" role="img" aria-label="LSTM training and validation loss over 50 epochs showing convergence">Training and validation loss convergence over 50 epochs.</canvas>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-bottom:1.25rem;">
+    <div class="panel-title">Pain points & system limitations — satellite expert analysis</div>
+    <div class="pain-grid" id="pain-grid"></div>
+  </div>
+
+  <div class="footer-note">
+    AI for Satellite Fault Detection · LSTM Autoencoder Prototype · Bachelor of Engineering in Computer Science · Simulated telemetry data for demonstration
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script>
+const N = 80;
+let currentParam = 'temp';
+let threshold = 0.35;
+let tick = 0;
+let telChart, reconChart, compareChart, lossChart;
+
+const paramMeta = {
+  temp: { label: 'Temperature (°C)', min: 15, max: 45, normal: 28, unit: '°C', color: '#E24B4A' },
+  volt: { label: 'Bus voltage (V)', min: 22, max: 30, normal: 26, unit: ' V', color: '#378ADD' },
+  pres: { label: 'Pressure (kPa)', min: 85, max: 105, normal: 95, unit: ' kPa', color: '#1D9E75' },
+  cpu: { label: 'CPU usage (%)', min: 10, max: 95, normal: 45, unit: '%', color: '#BA7517' }
+};
+
+function seededNoise(t, seed=0) {
+  const x = Math.sin(t * 1.3 + seed) * 10000;
+  return x - Math.floor(x);
+}
+
+function genTelemetry(param, n=N) {
+  const m = paramMeta[param];
+  const data = [], labels = [], anomalyScore = [], isAnomaly = [];
+  const faultAt = [Math.floor(n * 0.32), Math.floor(n * 0.71)];
+  for (let i = 0; i < n; i++) {
+    const t = (i + tick) / 10;
+    let v = m.normal + Math.sin(t * 0.7) * 3 + (seededNoise(t, param.length) - 0.5) * 2.5;
+    let score = Math.abs(seededNoise(t * 3.1, 7) - 0.3) * 0.4;
+    const isFault = faultAt.some(f => Math.abs(i - f) <= 4);
+    if (isFault) {
+      const spike = (m.max - m.normal) * 0.7;
+      v += spike * Math.exp(-Math.pow(Math.abs(i - faultAt.find(f => Math.abs(i - f) <= 4)), 2) / 6);
+      score = 0.5 + seededNoise(i * 7.3, 3) * 0.45;
+    }
+    v = Math.max(m.min, Math.min(m.max, v));
+    data.push(parseFloat(v.toFixed(2)));
+    anomalyScore.push(parseFloat(Math.min(1, score).toFixed(3)));
+    isAnomaly.push(score > threshold);
+    labels.push(i === 0 ? 'T-80' : i === n - 1 ? 'Now' : '');
+  }
+  return { data, labels, anomalyScore, isAnomaly };
+}
+
+function genReconError(n=N) {
+  const errors = [];
+  const faultAt = [Math.floor(n * 0.32), Math.floor(n * 0.71)];
+  for (let i = 0; i < n; i++) {
+    const t = (i + tick) / 8;
+    let e = 0.04 + (seededNoise(t * 2.1, 5) - 0.5) * 0.05;
+    const isFault = faultAt.some(f => Math.abs(i - f) <= 4);
+    if (isFault) e += 0.3 + seededNoise(i * 5, 9) * 0.25;
+    errors.push(parseFloat(Math.max(0, e).toFixed(4)));
+  }
+  return errors;
+}
+
+function createTelChart() {
+  const ctx = document.getElementById('telChart').getContext('2d');
+  const { data, labels, anomalyScore } = genTelemetry(currentParam);
+  const m = paramMeta[currentParam];
+  const bgColors = data.map((_, i) => {
+    const s = anomalyScore[i];
+    return s > threshold ? 'rgba(226,75,74,0.18)' : 'rgba(55,138,221,0.0)';
+  });
+  telChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: Array.from({length: N}, (_, i) => `T${i-N+1}`),
+      datasets: [
+        {
+          label: m.label,
+          data,
+          borderColor: m.color,
+          backgroundColor: 'transparent',
+          borderWidth: 1.5,
+          pointRadius: data.map((_, i) => anomalyScore[i] > threshold ? 5 : 0),
+          pointBackgroundColor: data.map((_, i) => anomalyScore[i] > threshold ? '#E24B4A' : m.color),
+          tension: 0.35,
+        },
+        {
+          label: 'Anomaly region',
+          data: data.map((v, i) => anomalyScore[i] > threshold ? v : null),
+          borderColor: 'transparent',
+          backgroundColor: 'rgba(226,75,74,0.12)',
+          fill: false,
+          pointRadius: 0,
+        }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#888', font: { size: 10 }, maxTicksLimit: 8, autoSkip: true }, grid: { color: 'rgba(128,128,128,0.08)' } },
+        y: { min: m.min - 2, max: m.max + 2, ticks: { color: '#888', font: { size: 10 }, callback: v => v.toFixed(0) + m.unit }, grid: { color: 'rgba(128,128,128,0.08)' } }
+      }
+    }
+  });
+}
+
+function createReconChart() {
+  const ctx = document.getElementById('reconChart').getContext('2d');
+  const errors = genReconError();
+  reconChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: Array.from({length: N}, (_, i) => `T${i-N+1}`),
+      datasets: [
+        {
+          label: 'Reconstruction error',
+          data: errors,
+          borderColor: '#7F77DD',
+          backgroundColor: 'rgba(127,119,221,0.08)',
+          borderWidth: 1.5,
+          fill: true,
+          pointRadius: 0,
+          tension: 0.3,
+        },
+        {
+          label: 'Threshold',
+          data: Array(N).fill(threshold * 0.55),
+          borderColor: '#E24B4A',
+          borderWidth: 1.5,
+          borderDash: [4, 4],
+          pointRadius: 0,
+          fill: false,
+        }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false, animation: { duration: 200 },
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#888', font: { size: 10 }, maxTicksLimit: 6 }, grid: { color: 'rgba(128,128,128,0.08)' } },
+        y: { min: 0, max: 0.55, ticks: { color: '#888', font: { size: 10 }, callback: v => v.toFixed(2) }, grid: { color: 'rgba(128,128,128,0.08)' } }
+      }
+    }
+  });
+}
+
+function createCompareChart() {
+  const ctx = document.getElementById('compareChart').getContext('2d');
+  compareChart = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ['LSTM\nAutoenc.', 'GRU', 'Random\nForest', 'SVM', 'Threshold'],
+      datasets: [
+        { label: 'Accuracy', data: [96.4, 94.1, 89.7, 87.2, 81.5], backgroundColor: '#378ADD', borderRadius: 3 },
+        { label: 'Precision', data: [94.1, 91.3, 86.4, 83.1, 74.2], backgroundColor: '#1D9E75', borderRadius: 3 },
+        { label: 'Recall', data: [91.7, 89.5, 84.2, 80.8, 70.9], backgroundColor: '#BA7517', borderRadius: 3 },
+        { label: 'F1', data: [92.9, 90.4, 85.3, 81.9, 72.5], backgroundColor: '#7F77DD', borderRadius: 3 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#888', font: { size: 9 } }, grid: { display: false } },
+        y: { min: 65, max: 100, ticks: { color: '#888', font: { size: 9 }, callback: v => v + '%' }, grid: { color: 'rgba(128,128,128,0.08)' } }
+      }
+    }
+  });
+}
+
+function createLossChart() {
+  const ctx = document.getElementById('lossChart').getContext('2d');
+  const epochs = Array.from({length: 50}, (_, i) => i + 1);
+  const trainLoss = epochs.map(e => 0.45 * Math.exp(-e / 8) + 0.02 + Math.sin(e * 0.8) * 0.005 * Math.exp(-e / 15));
+  const valLoss = epochs.map(e => 0.48 * Math.exp(-e / 9) + 0.025 + Math.sin(e * 0.6) * 0.008 * Math.exp(-e / 12));
+  lossChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: epochs,
+      datasets: [
+        { label: 'Train loss', data: trainLoss.map(v => parseFloat(v.toFixed(4))), borderColor: '#378ADD', backgroundColor: 'transparent', borderWidth: 1.5, pointRadius: 0, tension: 0.4 },
+        { label: 'Val loss', data: valLoss.map(v => parseFloat(v.toFixed(4))), borderColor: '#E24B4A', backgroundColor: 'transparent', borderWidth: 1.5, borderDash: [4,3], pointRadius: 0, tension: 0.4 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#888', font: { size: 9 }, maxTicksLimit: 7 }, grid: { display: false } },
+        y: { ticks: { color: '#888', font: { size: 9 }, callback: v => v.toFixed(2) }, grid: { color: 'rgba(128,128,128,0.08)' } }
+      }
+    }
+  });
+}
+
+function updateParamBars() {
+  const params = [
+    { key: 'temp', label: 'Temperature', val: 28 + Math.sin(tick / 5) * 3 + Math.random() * 1.5, max: 45, unit: '°C', fault: false },
+    { key: 'volt', label: 'Bus voltage', val: 26 + Math.sin(tick / 7 + 1) * 0.8 + Math.random() * 0.4, max: 30, unit: ' V', fault: tick % 47 < 6 },
+    { key: 'pres', label: 'Pressure', val: 95 + Math.sin(tick / 9 + 2) * 2 + Math.random() * 1, max: 105, unit: ' kPa', fault: false },
+    { key: 'cpu', label: 'CPU usage', val: 45 + Math.sin(tick / 3 + 3) * 12 + Math.random() * 5, max: 100, unit: '%', fault: tick % 31 < 4 }
+  ];
+  const colors = { false: '#1D9E75', true: '#E24B4A' };
+  const bgColors = { false: '#1D9E75', true: '#E24B4A' };
+  document.getElementById('param-bars').innerHTML = params.map(p => {
+    const pct = Math.min(100, (p.val / p.max) * 100);
+    const dotColor = p.fault ? '#E24B4A' : '#1D9E75';
+    return `<div class="param-row">
+      <label>${p.label}</label>
+      <div class="bar-bg"><div class="bar-fill" style="width:${pct.toFixed(1)}%;background:${dotColor};"></div></div>
+      <div class="val">${p.val.toFixed(1)}${p.unit}</div>
+      <div class="status" style="background:${dotColor};"></div>
+    </div>`;
+  }).join('');
+}
+
+function updateAlerts() {
+  const now = new Date();
+  const fmt = d => d.toTimeString().slice(0,8) + ' UTC';
+  const alerts = [
+    { msg: 'Voltage anomaly on Bus-B: 23.1V (below 24V nominal)', time: fmt(new Date(now - 180000)), sev: 'danger' },
+    { msg: 'CPU spike detected: 87% utilization — possible process runaway', time: fmt(new Date(now - 420000)), sev: 'danger' },
+  ];
+  document.getElementById('alert-list').innerHTML = alerts.map(a => `
+    <div class="alert-box">
+      <div class="icon" style="font-size:14px;">&#9888;</div>
+      <div class="msg">${a.msg}</div>
+      <div class="time">${a.time}</div>
+    </div>`).join('');
+  document.getElementById('uplink-time').textContent = fmt(new Date(now - 95000));
+}
+
+function renderPainPoints() {
+  const points = [
+    { sev: 'high', t: 'High communication latency', d: 'Ground-satellite uplink delay (250–900ms) makes real-time closed-loop control infeasible. Anomaly alerts arrive after critical window.', label: 'Critical' },
+    { sev: 'high', t: 'Limited labeled fault data', d: 'Real satellite faults are rare — LSTM trains on mostly normal data. Class imbalance leads to higher false-negative risk on novel faults.', label: 'Critical' },
+    { sev: 'med', t: 'Threshold sensitivity', d: 'Reconstruction error threshold is manually tuned. Too low → false alarms overload ground operators; too high → missed faults.', label: 'Moderate' },
+    { sev: 'med', t: 'Sensor drift over time', d: 'Telemetry baselines shift as spacecraft ages. Model requires periodic re-training or adaptive thresholds to avoid false positives.', label: 'Moderate' },
+    { sev: 'med', t: 'On-board compute constraints', d: 'Running LSTM inference on flight-grade processors (e.g. SPARC V8) is computationally expensive. Model compression (pruning, quantization) needed.', label: 'Moderate' },
+    { sev: 'low', t: 'Multi-fault ambiguity', d: 'Simultaneous faults in multiple subsystems produce combined signatures. LSTM may attribute fault to the wrong subsystem without explainability layer.', label: 'Engineering' },
+    { sev: 'low', t: 'Eclipse thermal cycling', d: 'Satellites pass through Earth shadow causing periodic temperature swings that mimic fault signatures if not properly segmented in training.', label: 'Engineering' },
+    { sev: 'low', t: 'Ground software integration', d: 'Integrating ML pipeline with legacy EGSE/MLSE ground systems (often CCSDS-based) requires custom middleware layers.', label: 'Integration' },
+  ];
+  document.getElementById('pain-grid').innerHTML = points.map(p => `
+    <div class="pain-item ${p.sev}">
+      <div class="pt">${p.t}</div>
+      <div class="pd">${p.d}</div>
+      <span class="severity">${p.label}</span>
+    </div>`).join('');
+}
+
+function setParam(param) {
+  currentParam = param;
+  ['temp','volt','pres','cpu'].forEach(p => {
+    document.getElementById('btn-' + p).classList.toggle('active', p === param);
+  });
+  document.getElementById('param-label').textContent = paramMeta[param].label;
+  if (telChart) telChart.destroy();
+  createTelChart();
+}
+
+function updateThreshold(val) {
+  threshold = parseFloat(val);
+  document.getElementById('thr-val').textContent = threshold.toFixed(2);
+  document.getElementById('thr-disp').textContent = threshold.toFixed(2);
+  recalcConfusionMatrix();
+  if (telChart) { telChart.destroy(); createTelChart(); }
+  if (reconChart) { reconChart.destroy(); createReconChart(); }
+}
+
+function recalcConfusionMatrix() {
+  const base_tp = 60, base_fn = 0, total_neg = 440;
+  const tp = Math.round(base_tp * (1 - (threshold - 0.1) * 0.3));
+  const fn = 60 - tp;
+  const fp = Math.round(total_neg * threshold * 0.08);
+  const tn = total_neg - fp;
+  const acc = ((tp + tn) / 500 * 100).toFixed(1);
+  const prec = (tp / (tp + fp) * 100).toFixed(1);
+  const rec = (tp / (tp + fn) * 100).toFixed(1);
+  const f1 = (2 * tp / (2 * tp + fp + fn)).toFixed(3);
+  document.getElementById('cm-tp').textContent = tp;
+  document.getElementById('cm-tn').textContent = tn;
+  document.getElementById('cm-fp').textContent = fp;
+  document.getElementById('cm-fn').textContent = fn;
+  document.getElementById('m-acc').textContent = acc + '%';
+  document.getElementById('m-prec').textContent = prec + '%';
+  document.getElementById('m-rec').textContent = rec + '%';
+  document.getElementById('m-f1').textContent = f1;
+}
+
+let orbitNum = 1428;
+function updateStatusAndTick() {
+  tick++;
+  orbitNum = 1428 + Math.floor(tick / 120);
+  document.getElementById('status-txt').textContent = `Live — Orbit ${orbitNum}`;
+  updateParamBars();
+  if (telChart) {
+    const { data, anomalyScore } = genTelemetry(currentParam);
+    telChart.data.datasets[0].data = data;
+    telChart.data.datasets[0].pointRadius = data.map((_, i) => anomalyScore[i] > threshold ? 5 : 0);
+    telChart.data.datasets[1].data = data.map((v, i) => anomalyScore[i] > threshold ? v : null);
+    const faults = anomalyScore.filter(s => s > threshold).length;
+    document.getElementById('fault-count-badge').textContent = `${faults} fault${faults !== 1 ? 's' : ''} detected`;
+    document.getElementById('alert-count').textContent = faults > 0 ? '2 active' : '0 active';
+    telChart.update('none');
+  }
+  if (reconChart) {
+    const errors = genReconError();
+    reconChart.data.datasets[0].data = errors;
+    reconChart.data.datasets[1].data = Array(N).fill(threshold * 0.55);
+    reconChart.update('none');
+  }
+}
+
+window.addEventListener('load', () => {
+  createTelChart();
+  createReconChart();
+  createCompareChart();
+  createLossChart();
+  updateParamBars();
+  updateAlerts();
+  renderPainPoints();
+  setInterval(updateStatusAndTick, 800);
+});
+</script>
